@@ -112,3 +112,7 @@ not provide resilience against failure of that worker.
 
 The cluster IP addresses and NodePort URL are specific to this lab
 environment and may need changing in another environment.
+
+## Architecture Diagram
+
+![Self-managed Kubernetes architecture](screenshots/59-kubeadm-kubernetes-architecture.png)
