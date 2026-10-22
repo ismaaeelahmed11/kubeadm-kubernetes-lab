@@ -12,6 +12,16 @@ The repository includes Kubernetes manifests and **19 architecture, configuratio
 
 ---
 
+## 🎬 Project Walkthrough
+
+Watch my 2-minute technical walkthrough covering the self-managed Kubernetes architecture, cluster bootstrapping with kubeadm, container networking, NGINX deployment, scaling, self-healing, rolling updates and troubleshooting.
+
+[![Watch the Self-Managed Kubernetes Project Walkthrough](https://img.youtube.com/vi/a9hATioCGcs/hqdefault.jpg)](https://youtu.be/a9hATioCGcs)
+
+**[▶ Watch the Self-Managed Kubernetes Project Walkthrough on YouTube](https://youtu.be/a9hATioCGcs)**
+
+---
+
 ## At a Glance
 
 | Area | Implementation |
