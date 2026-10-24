@@ -1,203 +1,308 @@
-# Self-Managed Kubernetes Cluster | kubeadm Homelab
+# Self-Managed Kubernetes — kubeadm & Cluster Operations
 
-**A two-node Kubernetes cluster built and operated from scratch on Ubuntu virtual machines — without a managed Kubernetes service.**
+**Kubernetes · Linux · kubeadm · containerd · Calico · Networking · Troubleshooting**
 
-This project demonstrates hands-on cluster administration, container networking, application deployment, service exposure, workload recovery, scaling, rolling updates, and troubleshooting.
+Built and operated a **two-node, self-managed Kubernetes cluster** on Ubuntu virtual machines using kubeadm, containerd and Calico — working directly with the underlying infrastructure rather than relying on a managed Kubernetes service.
 
-**Key result:** A working Kubernetes v1.35.9 control plane and worker node running an NGINX application with **4 replicas**, accessible from the Windows host through a **NodePort Service**.
+The project covers cluster bootstrapping, node networking, application deployment, Kubernetes Services, workload health checks, scaling, self-healing, rolling updates, rollback and troubleshooting.
 
-The repository includes Kubernetes manifests and **19 architecture, configuration, operation, and troubleshooting screenshots**.
+I built this environment independently after completing an AWS EKS project because I wanted to understand what happens underneath managed Kubernetes: how nodes join a cluster, how pod networking works, how workloads are scheduled and how to recover when components fail.
 
-[View the Architecture](#architecture) · [Implementation Evidence](#implementation-evidence) · [Deployment Guide](#deploy-the-application) · [Troubleshooting](#troubleshooting-and-lessons-learned)
+**Verified outcome:** A working Kubernetes v1.35.9 control plane and worker node, with **four healthy NGINX replicas** accessible from the Windows host through a NodePort Service.
+
+The repository includes Kubernetes manifests, an architecture diagram and **19 screenshots** documenting the cluster configuration, application deployment, operational tests and troubleshooting.
+
+**[Architecture](#architecture)** · **[Implementation Evidence](#implementation-evidence)** · **[Deployment Guide](#deploy-the-application)** · **[Troubleshooting](#troubleshooting-and-lessons-learned)**
 
 ---
 
-## 🎬 Project Walkthrough
+## Project Walkthrough
 
-Watch my 2-minute technical walkthrough covering the self-managed Kubernetes architecture, cluster bootstrapping with kubeadm, container networking, NGINX deployment, scaling, self-healing, rolling updates and troubleshooting.
+A technical walkthrough covering the self-managed Kubernetes architecture, cluster bootstrap with kubeadm, container networking, NGINX deployment, scaling, self-healing, rolling updates and troubleshooting.
 
 [![Watch the Self-Managed Kubernetes Project Walkthrough](https://img.youtube.com/vi/a9hATioCGcs/hqdefault.jpg)](https://youtu.be/a9hATioCGcs)
 
-**[▶ Watch the Self-Managed Kubernetes Project Walkthrough on YouTube](https://youtu.be/a9hATioCGcs)**
+**[▶ Watch the Kubernetes kubeadm Project Walkthrough (2:00)](https://youtu.be/a9hATioCGcs)**
 
 ---
 
-## At a Glance
+## Infrastructure Overview
 
-| Area | Implementation |
+| Component | Implementation |
 | --- | --- |
-| Infrastructure | 2 Ubuntu 26.04.1 LTS VMs on Oracle VirtualBox, with NAT and host-only networking |
-| Kubernetes | v1.35.9, bootstrapped with `kubeadm` |
-| Container runtime | containerd 2.2.2 |
-| Pod networking | Calico v3.31.0 |
-| Workload | NGINX Deployment, 4 replicas on the worker node |
-| Services | ClusterIP for internal access; NodePort for access from the Windows host |
-| Reliability features tested | Readiness/liveness probes, pod self-healing, scaling, rolling updates, rollback |
-| Configuration | Declarative Kubernetes YAML manifests stored in Git |
+| **Infrastructure** | 2 Ubuntu 26.04.1 LTS VMs on Oracle VirtualBox |
+| **Kubernetes** | v1.35.9, bootstrapped with kubeadm |
+| **Control Plane** | `k8s-control` |
+| **Worker Node** | `k8s-worker` |
+| **Container Runtime** | containerd 2.2.2 |
+| **Container Network Interface** | Calico v3.31.0 |
+| **VM Networking** | NAT and host-only networking |
+| **Application** | NGINX |
+| **Application Replicas** | 4 on the worker node |
+| **Kubernetes Services** | ClusterIP and NodePort |
+| **Health Management** | Readiness/liveness probes |
+| **Resources** | CPU/memory requests and limits |
+| **Operations Tested** | Scaling, pod self-healing, rolling updates, rollback |
+| **Configuration** | Declarative Kubernetes YAML manifests |
+| **Deployment Evidence** | 19 screenshots and architecture diagram |
+
+This is a local Kubernetes infrastructure lab, not a commercial production deployment.
 
 ---
 
 ## Architecture
 
-![Architecture of the self-managed kubeadm Kubernetes lab](screenshots/59-kubeadm-kubernetes-architecture.png)
+![Self-Managed Kubernetes Architecture](screenshots/59-kubeadm-kubernetes-architecture.png)
 
 ### Cluster Nodes
 
-| VM | Responsibility | Host-only IP |
+The lab consists of two Ubuntu virtual machines running on Oracle VirtualBox.
+
+| Node | Responsibility | Host-only IP |
 | --- | --- | --- |
 | `k8s-control` | Kubernetes control plane | `192.168.56.10` |
-| `k8s-worker` | Kubernetes worker running NGINX pods | `192.168.56.11` |
+| `k8s-worker` | Worker node running NGINX workloads | `192.168.56.11` |
+
+### Control Plane
+
+The control-plane node runs the Kubernetes components responsible for managing cluster state and coordinating workloads.
+
+It provides the Kubernetes API through which cluster administration commands are issued.
+
+I initialised this node using `kubeadm` before joining the worker node.
+
+### Worker Node
+
+The worker node runs the application workloads.
+
+It uses containerd as the container runtime and Calico for pod networking.
+
+The NGINX Deployment was configured to run four replicas, which were scheduled on the worker node.
 
 ### How Traffic Reaches the Application
 
-**External lab access:**
+**Access from the Windows host**
 
-Windows host → Worker node `192.168.56.11:32396` → `nginx-nodeport` Service → NGINX pods.
+```text
+Windows Host
+     |
+     | HTTP :32396
+     v
+Worker Node — 192.168.56.11
+     |
+     v
+NodePort Service — nginx-nodeport
+     |
+     v
+NGINX Pods
+```
 
-**Internal cluster access:**
+**Internal Kubernetes access**
 
-In-cluster clients → `nginx-service` ClusterIP Service (port 80) → NGINX pods.
+```text
+In-cluster Client
+     |
+     v
+ClusterIP Service — nginx-service :80
+     |
+     v
+NGINX Pods
+```
 
-**Cluster management:**
+The ClusterIP and NodePort Services provide separate access paths to the same NGINX workload.
 
-`kubectl` communicates with the Kubernetes API server on the control plane. Kubernetes schedules and manages application workloads on the worker node.
+Traffic does not need to pass through the ClusterIP Service before reaching the NodePort Service.
 
-The ClusterIP and NodePort Services are **separate ways to reach the same workload**. Traffic does not need to pass through one Service to reach the other.
+### Cluster Administration
 
-The IP addresses and NodePort are specific to this local lab.
+`kubectl` communicates with the Kubernetes API server on the control-plane node.
+
+The Kubernetes control plane manages the desired state of workloads, while the worker node runs the containers.
+
+**Note:** The IP addresses and NodePort shown in this README belong to my local VirtualBox environment. Other environments may use different addresses or ports.
 
 ---
 
-## VM Network Configuration
+## VM Networking Configuration
 
-Each virtual machine uses a VirtualBox networking arrangement designed for a local Kubernetes environment.
+Both virtual machines use a networking configuration designed to support a local Kubernetes environment.
 
-- **NAT:** Provides outbound connectivity for downloading packages and installing software.
-- **Host-only networking:** Enables communication between the Windows host and Kubernetes virtual machines.
-- **Static IP addresses:** Provide predictable addresses for cluster administration, SSH and application access.
+### NAT Networking
 
-### Infrastructure Evidence
+NAT provides outbound connectivity for:
 
-| Configuration | Screenshot | Purpose |
-| --- | --- | --- |
-| NAT adapter | [View configuration](screenshots/03-control-plane-nat.png) | Outbound network access |
-| Host-only adapter | [View configuration](screenshots/04-control-plane-hostonly.png) | Communication between the Windows host and lab VMs |
-| Static control-plane IP | [View configuration](screenshots/06-control-plane-static-ip.png) | Predictable control-plane address at `192.168.56.10` |
+- Downloading packages
+- Installing Kubernetes components
+- Retrieving container images
+- Accessing external repositories
 
-These screenshots document the control-plane VM configuration.
+### Host-Only Networking
 
-The worker node was assigned `192.168.56.11` on the host-only network.
+Host-only networking enables communication between the Windows host and the Kubernetes VMs.
+
+It provides the network path used for administration and accessing the NGINX application through NodePort.
+
+### Static IP Addresses
+
+I configured predictable IP addresses for the two nodes:
+
+- Control plane: `192.168.56.10`
+- Worker: `192.168.56.11`
+
+This simplified SSH access, node connectivity and application testing.
+
+### Networking Evidence
+
+| Configuration | Evidence |
+| --- | --- |
+| Control-plane NAT adapter | [View screenshot](screenshots/03-control-plane-nat.png) |
+| Control-plane host-only adapter | [View screenshot](screenshots/04-control-plane-hostonly.png) |
+| Static control-plane IP | [View screenshot](screenshots/06-control-plane-static-ip.png) |
+
+The worker node was configured with `192.168.56.11` on the host-only network.
 
 ---
 
-## What I Implemented
+## Engineering Implementation
 
 ### 1. Infrastructure Preparation
 
-- Created Ubuntu virtual machines using Oracle VirtualBox.
+Created the underlying virtual infrastructure before installing Kubernetes.
+
+- Provisioned Ubuntu VMs using Oracle VirtualBox.
 - Configured NAT and host-only networking.
-- Assigned predictable node IP addresses.
+- Assigned static IP addresses.
 - Installed and configured containerd.
-- Installed Kubernetes components.
+- Installed Kubernetes tooling.
 - Initialised the control plane using `kubeadm`.
-- Joined a worker node to the cluster.
+- Joined the worker node to the cluster.
 
-### 2. Kubernetes Networking
+This provided experience working with the infrastructure required to run Kubernetes, rather than starting with a preconfigured cluster.
 
-- Installed Calico as the Container Network Interface (CNI).
+### 2. Kubernetes Bootstrap and Networking
+
+After preparing the VMs, I configured the Kubernetes environment.
+
+- Bootstrapped the control plane using kubeadm.
+- Configured containerd as the container runtime.
+- Installed Calico as the Container Network Interface.
 - Verified Kubernetes system components.
-- Confirmed both cluster nodes reached the `Ready` state.
-- Tested communication through Kubernetes Services.
+- Joined the worker node.
+- Confirmed both nodes reached the `Ready` state.
+
+This stage helped me understand the relationship between the container runtime, CNI, Kubernetes API and node readiness.
 
 ### 3. Application Deployment
 
-- Created a declarative NGINX Deployment.
-- Configured CPU and memory requests and limits.
-- Configured readiness and liveness probes.
-- Created ClusterIP and NodePort Services.
-- Verified NGINX was running on the worker node.
+Deployed NGINX using declarative Kubernetes YAML manifests.
 
-### 4. Application Connectivity
+Configured:
 
-- Tested internal access through the ClusterIP Service.
-- Exposed NGINX through a NodePort Service.
-- Accessed the application from the Windows host.
-- Verified HTTP connectivity after application updates.
+- Kubernetes Deployment
+- ClusterIP Service
+- NodePort Service
+- Readiness and liveness probes
+- CPU and memory resource requests
+- CPU and memory resource limits
+
+The workload was successfully scheduled on the Kubernetes worker node.
+
+### 4. Service Networking and Connectivity
+
+Exposed the NGINX application through two Kubernetes Services.
+
+**ClusterIP:** Provides internal service connectivity within Kubernetes.
+
+**NodePort:** Makes the application accessible through the node's IP address and allocated port.
+
+Verified application access from the Windows host and tested connectivity after application updates.
 
 ### 5. Kubernetes Operations
 
-- Scaled the Deployment to four replicas.
-- Deleted a pod to observe automatic replacement.
-- Performed a rolling application update.
-- Verified the application after updating.
-- Rolled back the Deployment to a previous revision.
+Performed operational exercises against the cluster, including:
+
+- Scaling the Deployment to four replicas
+- Deleting a pod and observing automatic replacement
+- Performing a rolling application update
+- Checking rollout status
+- Restoring a previous Deployment revision
+- Verifying application connectivity after the rollback
+
+These tests demonstrate Kubernetes Deployment management and basic workload recovery.
 
 ### 6. Infrastructure Troubleshooting
 
-- Investigated Kubernetes bootstrap issues.
-- Diagnosed VirtualBox CPU performance problems.
-- Investigated cluster access and RBAC issues.
-- Recovered the cluster and verified its components.
+Worked through issues affecting the underlying Kubernetes environment, including:
+
+- VirtualBox CPU performance problems
+- Kubernetes bootstrap failures
+- Cluster administrative access
+- RBAC-related investigation
+- Kubernetes component recovery and readiness checks
+
+These problems required investigating the environment underneath the application manifests.
 
 ---
 
 ## Implementation Evidence
 
-The following screenshots document the working Kubernetes environment and the operational tests completed during the project.
-
-Supporting installation evidence is included as links to keep the README easy to navigate.
+The following **19 screenshots** document the infrastructure configuration, Kubernetes installation, application deployment, operational tests, troubleshooting and final architecture.
 
 ### 1. Kubernetes Cluster Running
 
-Both the control-plane and worker nodes successfully joined the cluster and reached the `Ready` state.
+Both Kubernetes nodes successfully joined the cluster and reached the `Ready` state.
 
-![Both Kubernetes nodes Ready](screenshots/49-two-node-kubernetes-cluster-ready.png)
+![Two Kubernetes Nodes Ready](screenshots/49-two-node-kubernetes-cluster-ready.png)
 
-**Additional evidence:**
+**Supporting evidence**
 
-- [Container runtime configured](screenshots/16-control-plane-containerd.png)
-- [Kubernetes tooling installed](screenshots/22-kubernetes-tools-installed.png)
+- [Containerd configured](screenshots/16-control-plane-containerd.png)
+- [Kubernetes tools installed](screenshots/22-kubernetes-tools-installed.png)
 - [Calico CNI installed](screenshots/42-calico-cni-installation.png)
 - [Kubernetes system pods running](screenshots/43-kubernetes-system-pods-running.png)
 
 ### 2. Application Deployment and Networking
 
-NGINX was deployed on the Kubernetes worker node and exposed using Kubernetes Services.
+NGINX was deployed on the worker node and exposed using Kubernetes Services.
 
-The application was accessible from the Windows host through the NodePort Service.
+The application was accessible from the Windows host through NodePort.
 
-![NGINX accessible from Windows through NodePort](screenshots/53-nginx-nodeport-browser-access.png)
+![NGINX Accessible Through NodePort](screenshots/53-nginx-nodeport-browser-access.png)
 
-**Additional evidence:**
+**Supporting evidence**
 
-- [NGINX workloads scheduled on the worker](screenshots/51-nginx-workloads-on-worker.png)
-- [ClusterIP internal connectivity](screenshots/52-nginx-clusterip-service-connectivity.png)
+- [NGINX pods on worker node](screenshots/51-nginx-workloads-on-worker.png)
+- [ClusterIP connectivity](screenshots/52-nginx-clusterip-service-connectivity.png)
 
-### 3. Kubernetes Operations and Recovery
+### 3. Kubernetes Operations
 
-The cluster was used to practise common Kubernetes administration tasks.
+The cluster was used to test workload management, recovery and deployment changes.
 
-| Capability | Evidence |
-| --- | --- |
-| Pod self-healing | [Replacement pod after deletion](screenshots/54-kubernetes-self-healing-replacement-pod.png) |
-| Manual horizontal scaling | [Four NGINX replicas](screenshots/55-nginx-horizontal-scaling-four-replicas.png) |
-| Rolling update | [Successful rollout](screenshots/56-nginx-rolling-update-success.png) |
-| Post-update validation | [Application connectivity after update](screenshots/57-nginx-post-update-connectivity.png) |
-| Rollback | [Application connectivity after rollback](screenshots/58-nginx-rollback-connectivity.png) |
+| Test | Evidence | Result |
+| --- | --- | --- |
+| **Pod self-healing** | [Pod replacement](screenshots/54-kubernetes-self-healing-replacement-pod.png) | Replacement pod created after deletion |
+| **Scaling** | [Four replicas](screenshots/55-nginx-horizontal-scaling-four-replicas.png) | Four NGINX replicas running |
+| **Rolling update** | [Successful rollout](screenshots/56-nginx-rolling-update-success.png) | Deployment update completed |
+| **Post-update validation** | [Connectivity check](screenshots/57-nginx-post-update-connectivity.png) | Application remained accessible |
+| **Rollback** | [Rollback validation](screenshots/58-nginx-rollback-connectivity.png) | Previous revision restored and tested |
 
-These tests demonstrate how Kubernetes maintains the desired number of application replicas and supports controlled application changes.
+These exercises provided direct experience with Kubernetes Deployment behaviour and workload reconciliation.
 
 ### 4. Troubleshooting Evidence
 
-The Kubernetes lab required diagnosing issues beyond the application manifests.
+**Kubernetes administrative access and RBAC**
 
-**Kubernetes access and RBAC recovery**
+[View Kubernetes RBAC recovery screenshot](screenshots/28-kubernetes-rbac-recovery.png)
 
-[View RBAC recovery screenshot](screenshots/28-kubernetes-rbac-recovery.png)
-
-**VirtualBox hardware acceleration and performance**
+**VirtualBox performance and hardware acceleration**
 
 [View native VT-x acceleration confirmation](screenshots/37-native-vtx-acceleration-confirmed.png)
+
+### 5. Architecture Evidence
+
+The architecture diagram documents the two-node cluster, VM networking, Kubernetes Services and NGINX deployment.
+
+[View full architecture diagram](screenshots/59-kubeadm-kubernetes-architecture.png)
 
 ---
 
@@ -205,16 +310,28 @@ The Kubernetes lab required diagnosing issues beyond the application manifests.
 
 | Decision | Reason |
 | --- | --- |
-| Use `kubeadm` instead of a managed Kubernetes service | Gain direct experience with cluster bootstrap, node management, networking and troubleshooting |
-| Use separate control-plane and worker VMs | Understand Kubernetes node roles and workload scheduling |
-| Use NAT and host-only networking | Provide outbound package access while keeping lab networking local |
-| Use predictable node addresses | Simplify SSH, cluster communication and NodePort testing |
-| Use containerd | Provide a container runtime for Kubernetes workloads |
-| Use Calico | Enable pod networking within the self-managed cluster |
-| Use declarative YAML manifests | Keep application configuration version-controlled and repeatable |
-| Use ClusterIP and NodePort | Demonstrate internal service networking and application access from outside the cluster |
-| Configure readiness and liveness probes | Practise Kubernetes workload health management |
-| Configure resource requests and limits | Practise basic CPU and memory resource management |
+| **Use kubeadm** | Understand cluster bootstrap and administration rather than relying on a managed service |
+| **Separate control plane and worker node** | Understand node responsibilities and workload scheduling |
+| **Use Ubuntu VMs** | Work directly with Linux infrastructure supporting Kubernetes |
+| **Use NAT and host-only networking** | Provide outbound connectivity and local access |
+| **Use static node IPs** | Simplify administration, SSH and networking tests |
+| **Use containerd** | Run Kubernetes workloads using a container runtime |
+| **Use Calico** | Provide Kubernetes pod networking |
+| **Use declarative manifests** | Maintain application configuration in version control |
+| **Configure ClusterIP and NodePort** | Demonstrate internal networking and access from the host |
+| **Use readiness/liveness probes** | Understand application availability and container health checks |
+| **Use CPU/memory requests and limits** | Practise workload resource configuration |
+| **Test scaling and rollbacks** | Understand workload management and deployment recovery |
+
+### Why kubeadm instead of another managed Kubernetes service?
+
+I had already built a Kubernetes platform using Amazon EKS, which manages the Kubernetes control plane.
+
+For this project, I wanted to work more directly with the components that a managed service normally handles.
+
+Using kubeadm required me to configure the control plane and worker node, install the container runtime, configure pod networking and troubleshoot bootstrap and access issues.
+
+This made the lab a useful complement to EKS rather than another version of the same project.
 
 ---
 
@@ -249,49 +366,73 @@ kubeadm-kubernetes-lab/
     └── 59-kubeadm-kubernetes-architecture.png
 ```
 
+The repository contains the Kubernetes application manifests and implementation evidence.
+
+Cluster bootstrap was performed separately and is documented through the project description and screenshots. The repository does not contain a fully automated cluster provisioning process.
+
 ---
 
 ## Deploy the Application
 
+These instructions deploy the NGINX application and Services to an **existing Kubernetes cluster**.
+
+They do not create the VirtualBox VMs or bootstrap a new Kubernetes cluster.
+
 ### Prerequisites
 
-An existing, functioning Kubernetes cluster with:
+A functioning Kubernetes environment with:
 
-- `kubectl` installed and configured.
-- Kubernetes nodes in the `Ready` state.
-- A working container runtime and CNI.
-
-**Important:** These manifests deploy the NGINX application and Services. They do not provision the underlying VMs or create the Kubernetes cluster.
+- `kubectl` installed and configured
+- Kubernetes nodes in the `Ready` state
+- Working container runtime
+- Working CNI networking
+- Permission to create Deployments and Services
 
 ### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/ismaaeelahmed11/kubeadm-kubernetes-lab.git
+
 cd kubeadm-kubernetes-lab
 ```
 
-### 2. Validate the Manifests
+### 2. Check Cluster Connectivity
+
+```bash
+kubectl cluster-info
+
+kubectl get nodes -o wide
+
+kubectl get pods -A
+```
+
+Confirm the API server is accessible and the nodes are reporting `Ready`.
+
+### 3. Validate the Manifests
 
 ```bash
 kubectl apply --dry-run=client -f manifests/
 ```
 
-### 3. Deploy the Application
+Review the YAML configuration before deploying.
+
+### 4. Deploy NGINX
 
 ```bash
 kubectl apply -f manifests/
 ```
 
-### 4. Verify the Cluster and Workloads
+### 5. Verify the Application
 
 ```bash
-kubectl get nodes -o wide
 kubectl get deployments
+
 kubectl get pods -o wide
+
 kubectl get services
 ```
 
-### 5. Check Deployment Status
+Check the rollout:
 
 ```bash
 kubectl rollout status deployment/nginx-demo
@@ -305,71 +446,85 @@ From the Windows host connected to the VirtualBox host-only network:
 http://192.168.56.11:32396
 ```
 
-The address and port are environment-specific. Check `kubectl get services` if your setup differs.
+The IP address and NodePort are specific to my lab.
+
+For another environment, inspect the current Service configuration:
+
+```bash
+kubectl get services
+```
 
 ---
 
 ## Operational Tests
 
-The following operations were performed against the lab environment.
+These operations were performed against the running Kubernetes lab.
 
-### Horizontal Scaling
+### 1. Horizontal Scaling
 
-Scale the NGINX Deployment to four replicas:
+Scaled the NGINX Deployment to four replicas:
 
 ```bash
 kubectl scale deployment nginx-demo --replicas=4
 ```
 
-Verify the running pods:
+Verified the pods:
 
 ```bash
+kubectl get deployments
+
 kubectl get pods -o wide
 ```
 
 **Result:** Four NGINX replicas were running on the Kubernetes worker node.
 
-### Pod Self-Healing
+This demonstrated manual horizontal scaling through the Kubernetes Deployment controller.
 
-Kubernetes Deployments maintain the desired number of application replicas.
+A Horizontal Pod Autoscaler was not configured.
 
-During testing, an NGINX pod was deleted and the associated ReplicaSet created a replacement pod.
+### 2. Pod Self-Healing
 
-Monitor the application pods:
+Deleted an NGINX pod to observe how the Deployment controller responded.
+
+Kubernetes uses a ReplicaSet to maintain the desired number of replicas.
+
+Monitored the application:
 
 ```bash
 kubectl get pods -l app=nginx-demo -w
 ```
 
-**Result:** Kubernetes automatically replaced the deleted pod to restore the desired replica count.
+**Result:** Kubernetes created a replacement pod after deletion, restoring the desired replica count.
 
-### Rolling Updates
+This tested recovery from an individual pod deletion, not failure of the worker node.
 
-A rolling update was performed by changing the NGINX container image version.
+### 3. Rolling Updates
 
-Monitor rollout progress:
+Performed a rolling update by changing the NGINX container image version.
+
+Monitored progress:
 
 ```bash
 kubectl rollout status deployment/nginx-demo
 ```
 
-Inspect rollout history:
+Inspected the Deployment revision history:
 
 ```bash
 kubectl rollout history deployment/nginx-demo
 ```
 
-**Result:** The Deployment completed its rollout and application connectivity was verified afterwards.
+**Result:** The Deployment completed its rollout, and application connectivity was verified afterwards.
 
-### Deployment Rollback
+### 4. Deployment Rollback
 
-A previous Deployment revision was restored using:
+Restored a previous Deployment revision:
 
 ```bash
 kubectl rollout undo deployment/nginx-demo
 ```
 
-Verify completion:
+Checked the rollout:
 
 ```bash
 kubectl rollout status deployment/nginx-demo
@@ -377,109 +532,177 @@ kubectl rollout status deployment/nginx-demo
 
 **Result:** The rollback completed and NGINX connectivity was successfully tested.
 
-> These are operational exercises performed against the lab. Imperative changes should be reflected in declarative manifests when those changes are intended to remain part of the desired configuration.
+> These exercises used Kubernetes commands against the running lab. Where imperative changes are intended to persist, they should also be reflected in the declarative YAML configuration stored in Git.
 
 ---
 
 ## Troubleshooting and Lessons Learned
 
+The project involved troubleshooting the virtualisation environment, Kubernetes bootstrap and cluster administration.
+
+These issues reinforced how Kubernetes depends on the underlying operating system, networking and compute infrastructure.
+
 ### 1. VirtualBox Performance and Kubernetes Bootstrap
 
-**Challenge:**
+**Problem**
 
-During Kubernetes setup, the control-plane VM encountered CPU lockups and stalled Kubernetes components.
+During Kubernetes setup, the control-plane VM experienced CPU lockups and Kubernetes components stopped progressing normally.
 
-**Investigation:**
+**Investigation**
 
-- Checked the virtual machine's performance and resource configuration.
-- Investigated host virtualization settings.
+- Checked VM resource allocation and performance.
+- Investigated host virtualisation settings.
 - Examined Kubernetes component behaviour during bootstrap.
-- Verified native hardware acceleration was available.
+- Checked whether native hardware acceleration was available.
 
-**Resolution:**
+**Resolution**
 
-Recovered the VM environment with native hardware virtualization available and restored normal Kubernetes operation.
+Recovered the VM environment with native hardware virtualisation available and restored normal Kubernetes operation.
 
-**Evidence:** [VirtualBox hardware acceleration verification](screenshots/37-native-vtx-acceleration-confirmed.png)
+**Evidence:** [Native VT-x acceleration confirmation](screenshots/37-native-vtx-acceleration-confirmed.png)
 
-**Lesson learned:**
+**What I took from it**
 
-Kubernetes stability depends on the underlying infrastructure. VM performance, CPU virtualization and host configuration can affect control-plane availability.
+The Kubernetes control plane depends on the stability of the infrastructure underneath it.
+
+CPU virtualisation, VM performance and host configuration can prevent Kubernetes components from operating correctly even when the Kubernetes configuration itself appears valid.
 
 ### 2. Kubernetes Bootstrap and RBAC
 
-**Challenge:**
+**Problem**
 
-During the initial setup and recovery process, Kubernetes API access and permissions required investigation.
+Kubernetes API access and administrative permissions required investigation during the initial setup and recovery process.
 
-**Investigation:**
+**Investigation**
 
-- Examined cluster administration access.
-- Investigated Kubernetes RBAC configuration.
-- Worked through cluster recovery and component verification.
+- Examined Kubernetes administrative access.
+- Investigated authentication and RBAC configuration.
+- Worked through cluster recovery.
+- Verified Kubernetes component status after recovering access.
 
-**Resolution:**
+**Resolution**
 
 Recovered administrative access and continued the Kubernetes setup.
 
 **Evidence:** [Kubernetes RBAC recovery](screenshots/28-kubernetes-rbac-recovery.png)
 
-**Lesson learned:**
+**What I took from it**
 
-Understanding Kubernetes authentication, authorization and control-plane access is important when diagnosing cluster administration problems.
+Cluster administration depends on both authentication and authorisation.
+
+Being able to reach the Kubernetes API server does not necessarily mean a user has permission to perform the requested operation.
 
 ### 3. Understanding Workload Scheduling
 
-**Observation:**
+**Observation**
 
-The four NGINX replicas were scheduled on the worker node.
+All four NGINX replicas were scheduled on the same worker node.
 
-**Lesson learned:**
+**What I took from it**
 
-Multiple pod replicas improve resilience against individual pod failures, but they do not protect against a complete worker-node failure when every replica runs on the same node.
+Multiple replicas provide recovery from individual pod failures, but they do not provide redundancy against a complete worker-node failure when every pod runs on that node.
+
+A more resilient design would require additional worker nodes, appropriate scheduling configuration and actual failure testing.
 
 ### 4. Kubernetes Service Networking
 
-**Observation:**
+**Observation**
 
-The same NGINX workload was exposed through both ClusterIP and NodePort Services.
+NGINX was exposed using separate ClusterIP and NodePort Services.
 
-**Lesson learned:**
+Both Services routed requests to the application workload.
 
-ClusterIP provides internal Kubernetes service connectivity, while NodePort exposes a Service through a node's network address and allocated port.
+**What I took from it**
+
+ClusterIP provides internal Kubernetes service access.
+
+NodePort exposes a Service through a node's IP address and allocated port, subject to the surrounding network configuration.
+
+Understanding the relationship between Services, pod endpoints and node networking was important when validating application access.
 
 ---
 
 ## Scope and Limitations
 
-This project is a **local Kubernetes homelab**, not a production deployment.
+This project is a **self-managed Kubernetes homelab**, built to develop cluster administration and troubleshooting skills.
 
-- The cluster contains one control-plane node and one worker node.
-- The control plane is not highly available.
-- All four NGINX replicas run on a single worker node.
-- A worker-node failure can make the application unavailable.
-- NodePort access is through the configured VirtualBox host-only network, not the public internet.
-- Infrastructure provisioning and kubeadm bootstrap are not automated in this repository.
-- Scaling was performed manually; a Horizontal Pod Autoscaler was not implemented.
+It is not presented as a high-availability or commercially operated production environment.
 
-These limitations are intentional within the scope of the lab.
+The main limitations are:
+
+- **Single control plane:** The Kubernetes API is not highly available.
+- **Single worker node:** All four NGINX replicas depend on the same worker.
+- **No node-level failover:** Worker-node failure can make the application unavailable.
+- **Local networking:** NodePort access is through the VirtualBox host-only environment, not the public internet.
+- **Manual infrastructure setup:** VirtualBox provisioning and kubeadm bootstrap are not automated in this repository.
+- **Manual scaling:** Four replicas were configured through a scaling exercise, not an HPA.
+- **Limited operational testing:** Pod replacement, rolling updates and rollback were tested, but multi-node failover, disaster recovery and long-term production reliability were not.
+
+These limitations are intentional within the project's scope.
+
+The main objective was understanding and operating Kubernetes infrastructure directly.
 
 ---
 
-## Project Outcome
+## What This Project Demonstrates
 
-Successfully built and operated a **two-node, self-managed Kubernetes cluster** using `kubeadm`, containerd and Calico on Ubuntu virtual machines.
+This lab gave me practical experience working with Kubernetes beyond managed cloud platforms.
 
-The project provided practical experience in:
+**Infrastructure and administration**
 
-- Kubernetes control-plane and worker-node administration.
-- Container runtime and CNI configuration.
-- Declarative application deployment.
-- Kubernetes Service networking.
-- Application health checks and resource management.
-- Manual workload scaling.
-- Pod self-healing and Deployment reconciliation.
-- Rolling updates and rollbacks.
-- Infrastructure and Kubernetes troubleshooting.
+- Preparing Ubuntu virtual machines
+- Configuring node networking
+- Installing containerd
+- Bootstrapping Kubernetes with kubeadm
+- Joining and verifying a worker node
+- Configuring Calico pod networking
 
-**The objective was to gain hands-on experience with the underlying Kubernetes infrastructure and day-two operations, complementing experience with managed Kubernetes platforms such as Amazon EKS.**
+**Kubernetes application operations**
+
+- Deploying applications through declarative YAML
+- Configuring ClusterIP and NodePort Services
+- Managing readiness and liveness probes
+- Applying CPU and memory resource settings
+- Scaling workloads manually
+- Testing pod self-healing
+- Performing rolling updates and rollback
+
+**Troubleshooting**
+
+- Investigating VM CPU lockups
+- Working through Kubernetes bootstrap issues
+- Recovering cluster administrative access
+- Investigating RBAC configuration
+- Verifying Kubernetes system components and node readiness
+
+### Final Outcome
+
+Successfully built and operated a **two-node Kubernetes v1.35.9 cluster** on Ubuntu virtual machines, with containerd and Calico configured and four NGINX replicas accessible through NodePort.
+
+The most valuable part was understanding the underlying Kubernetes environment and working through the failures encountered during setup.
+
+This project complements my AWS EKS platform by demonstrating direct experience with the cluster components and administration tasks that a managed Kubernetes service normally handles.
+
+---
+
+## Related Engineering Projects
+
+### [AWS EKS — End-to-End Kubernetes, GitOps & Monitoring](https://github.com/ismaaeelahmed11/eks-project)
+
+A Terraform-provisioned EKS platform with NGINX Ingress, cert-manager, ExternalDNS, Argo CD, GitHub Actions and Prometheus/Grafana monitoring.
+
+**[View EKS Project →](https://github.com/ismaaeelahmed11/eks-project)** · **[Watch Walkthrough →](https://youtu.be/RDmnaTi2auE)**
+
+### [AWS ECS Fargate — End-to-End Infrastructure & CI/CD](https://github.com/ismaaeelahmed11/devops-learning/tree/main/ecs-project)
+
+A containerised Go application deployed to AWS ECS Fargate using Terraform, Docker, GitHub Actions, HTTPS and CloudWatch.
+
+**[View ECS Project →](https://github.com/ismaaeelahmed11/devops-learning/tree/main/ecs-project)** · **[Watch Walkthrough →](https://youtu.be/qpIZlJkWmos)**
+
+---
+
+## Connect
+
+**Ismaaeel Ahmed — DevOps & Cloud Engineering**
+
+[GitHub Portfolio](https://github.com/ismaaeelahmed11) · [LinkedIn](https://www.linkedin.com/in/ismaaeelahmed) · [Email](mailto:ismaaeelahmed11@gmail.com)
